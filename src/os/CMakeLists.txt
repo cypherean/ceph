@@ -33,6 +33,7 @@ if(WITH_BLUESTORE)
     bluestore/StupidAllocator.cc
     bluestore/BitmapAllocator.cc
     bluestore/AvlAllocator.cc
+    bluestore/BtreeAllocator.cc
     bluestore/HybridAllocator.cc
   )
 endif(WITH_BLUESTORE)
@@ -106,11 +107,6 @@ if(WITH_BLUESTORE)
     bluestore/bluestore_tool.cc)
   target_link_libraries(ceph-bluestore-tool
     os global)
-  # TODO: drop this linkage once we don't need to build on bionic
-  if(CMAKE_COMPILER_IS_GNUCXX AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 8.0)
-    target_link_libraries(ceph-bluestore-tool
-      Boost::filesystem)
-  endif()
   install(TARGETS ceph-bluestore-tool
     DESTINATION bin)
 endif()

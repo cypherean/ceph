@@ -7,6 +7,7 @@
 
 #include "common/hobject.h"
 #include "crimson/common/type_helpers.h"
+#include "crimson/os/seastore/logging.h"
 
 #include "fwd.h"
 #include "node.h"
@@ -79,8 +80,13 @@ class Btree {
     // XXX: return key_view_t to avoid unecessary ghobject_t constructions
     ghobject_t get_ghobj() const {
       assert(!is_end());
-      return p_cursor->get_key_view(
-          p_tree->value_builder.get_header_magic()).to_ghobj();
+      auto view = p_cursor->get_key_view(
+          p_tree->value_builder.get_header_magic());
+      assert(view.nspace().size() <=
+             p_tree->value_builder.get_max_ns_size());
+      assert(view.oid().size() <=
+             p_tree->value_builder.get_max_oid_size());
+      return view.to_ghobj();
     }
 
     ValueImpl value() {
@@ -236,15 +242,33 @@ class Btree {
   struct tree_value_config_t {
     value_size_t payload_size = 256;
   };
-  eagain_future<std::pair<Cursor, bool>>
+  using insert_ertr = eagain_ertr::extend<
+    crimson::ct_error::value_too_large>;
+  insert_ertr::future<std::pair<Cursor, bool>>
   insert(Transaction& t, const ghobject_t& obj, tree_value_config_t _vconf) {
+    LOG_PREFIX(OTree::insert);
+    if (_vconf.payload_size > value_builder.get_max_value_payload_size()) {
+      ERRORT("value payload size {} too large to insert {}",
+             t, _vconf.payload_size, key_hobj_t{obj});
+      return crimson::ct_error::value_too_large::make();
+    }
+    if (obj.hobj.nspace.size() > value_builder.get_max_ns_size()) {
+      ERRORT("namespace size {} too large to insert {}",
+             t, obj.hobj.nspace.size(), key_hobj_t{obj});
+      return crimson::ct_error::value_too_large::make();
+    }
+    if (obj.hobj.oid.name.size() > value_builder.get_max_oid_size()) {
+      ERRORT("oid size {} too large to insert {}",
+             t, obj.hobj.oid.name.size(), key_hobj_t{obj});
+      return crimson::ct_error::value_too_large::make();
+    }
     value_config_t vconf{value_builder.get_header_magic(), _vconf.payload_size};
     return seastar::do_with(
       full_key_t<KeyT::HOBJ>(obj),
       [this, &t, vconf](auto& key) -> eagain_future<std::pair<Cursor, bool>> {
         ceph_assert(key.is_valid());
         return get_root(t).safe_then([this, &t, &key, vconf](auto root) {
-          return root->insert(get_context(t), key, vconf);
+          return root->insert(get_context(t), key, vconf, std::move(root));
         }).safe_then([this](auto ret) {
           auto& [cursor, success] = ret;
           return std::make_pair(Cursor(this, cursor), success);
@@ -258,7 +282,7 @@ class Btree {
       full_key_t<KeyT::HOBJ>(obj),
       [this, &t](auto& key) -> eagain_future<std::size_t> {
         return get_root(t).safe_then([this, &t, &key](auto root) {
-          return root->erase(get_context(t), key);
+          return root->erase(get_context(t), key, std::move(root));
         });
       }
     );

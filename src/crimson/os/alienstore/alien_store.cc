@@ -33,20 +33,22 @@ namespace {
 
 class OnCommit final: public Context
 {
-  int cpuid;
+  seastar::alien::instance& alien;
+  const int cpuid;
   Context *oncommit;
   seastar::promise<> &alien_done;
 public:
   OnCommit(
+    seastar::alien::instance& alien,
     int id,
     seastar::promise<> &done,
     Context *oncommit,
     ceph::os::Transaction& txn)
-    : cpuid(id), oncommit(oncommit),
+    : alien(alien), cpuid(id), oncommit(oncommit),
       alien_done(done) {}
 
   void finish(int) final {
-    return seastar::alien::submit_to(cpuid, [this] {
+    return seastar::alien::submit_to(alien, cpuid, [this] {
       if (oncommit) {
         oncommit->complete(0);
       }
@@ -62,7 +64,8 @@ namespace crimson::os {
 using crimson::common::get_conf;
 
 AlienStore::AlienStore(const std::string& path, const ConfigValues& values)
-  : path{path}
+  : path{path},
+    alien{std::make_unique<seastar::alien::instance>()}
 {
   cct = std::make_unique<CephContext>(CEPH_ENTITY_TYPE_OSD);
   g_ceph_context = cct.get();
@@ -210,6 +213,9 @@ seastar::future<CollectionRef> AlienStore::open_collection(const coll_t& cid)
   return tp->submit([this, cid] {
     return store->open_collection(cid);
   }).then([this] (ObjectStore::CollectionHandle c) {
+    if (!c) {
+      return seastar::make_ready_future<CollectionRef>();
+    }
     CollectionRef ch;
     auto cp = coll_map.find(c->cid);
     if (cp == coll_map.end()){
@@ -332,8 +338,14 @@ AlienStore::get_attrs(CollectionRef ch,
   return seastar::do_with(attrs_t{}, [=] (auto &aset) {
     return tp->submit(ch->get_cid().hash_to_shard(tp->size()), [=, &aset] {
       auto c = static_cast<AlienCollection*>(ch.get());
-      return store->getattrs(c->collection, oid,
-		             reinterpret_cast<map<string,bufferptr>&>(aset));
+      std::map<std::string, ceph::bufferptr> blueaset;
+      const auto r = store->getattrs(c->collection, oid, blueaset);
+      for (auto& [bluekey, blueval] : blueaset) {
+        ceph::bufferlist bl;
+        bl.push_back(std::move(blueval));
+        aset.emplace(std::move(bluekey), std::move(bl));
+      }
+      return r;
     }).then([&aset] (int r) -> get_attrs_ertr::future<attrs_t> {
       if (r == -ENOENT) {
         return crimson::ct_error::enoent::make();
@@ -413,7 +425,9 @@ seastar::future<> AlienStore::do_transaction(CollectionRef ch,
 	  assert(tp);
 	  return tp->submit(ch->get_cid().hash_to_shard(tp->size()),
 	    [this, ch, id, crimson_wrapper, &txn, &done] {
-	    txn.register_on_commit(new OnCommit(id, done, crimson_wrapper, txn));
+	    txn.register_on_commit(new OnCommit(*alien,
+						id, done, crimson_wrapper,
+						txn));
 	    auto c = static_cast<AlienCollection*>(ch.get());
 	    return store->queue_transaction(c->collection, std::move(txn));
 	  });

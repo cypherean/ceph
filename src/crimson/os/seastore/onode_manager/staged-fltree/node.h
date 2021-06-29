@@ -336,7 +336,7 @@ class Node
    * - If false, the returned cursor points to the conflicting element in tree;
    */
   eagain_future<std::pair<Ref<tree_cursor_t>, bool>> insert(
-      context_t, const key_hobj_t&, value_config_t);
+      context_t, const key_hobj_t&, value_config_t, Ref<Node>&&);
 
   /**
    * erase
@@ -345,7 +345,7 @@ class Node
    *
    * Returns the number of erased key-value pairs (0 or 1).
    */
-  eagain_future<std::size_t> erase(context_t, const key_hobj_t&);
+  eagain_future<std::size_t> erase(context_t, const key_hobj_t&, Ref<Node>&&);
 
   /// Recursively collects the statistics of the sub-tree formed by this node
   eagain_future<tree_stats_t> get_tree_stats(context_t);
@@ -613,6 +613,7 @@ class LeafNode final : public Node {
   bool is_level_tail() const;
   node_version_t get_version() const;
   const char* read() const;
+  extent_len_t get_node_size() const;
   std::tuple<key_view_t, const value_header_t*> get_kv(const search_position_t&) const;
   eagain_future<Ref<tree_cursor_t>> get_next_cursor(context_t, const search_position_t&);
 

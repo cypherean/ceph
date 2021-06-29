@@ -21,7 +21,7 @@ namespace crimson::os::seastore::onode {
 class SeastoreSuper final: public Super {
  public:
   SeastoreSuper(Transaction& t, RootNodeTracker& tracker,
-                laddr_t root_addr, TransactionManager& tm)
+                laddr_t root_addr, InterruptedTransactionManager& tm)
     : Super(t, tracker), root_addr{root_addr}, tm{tm} {}
   ~SeastoreSuper() override = default;
  protected:
@@ -36,7 +36,7 @@ class SeastoreSuper final: public Super {
   }
  private:
   laddr_t root_addr;
-  TransactionManager& tm;
+  InterruptedTransactionManager tm;
 };
 
 class SeastoreNodeExtent final: public NodeExtent {
@@ -70,15 +70,15 @@ class SeastoreNodeExtent final: public NodeExtent {
 
 class TransactionManagerHandle : public NodeExtentManager {
  public:
-  TransactionManagerHandle(TransactionManager& tm) : tm{tm} {}
-  TransactionManager& tm;
+  TransactionManagerHandle(InterruptedTransactionManager tm) : tm{tm} {}
+  InterruptedTransactionManager tm;
 };
 
 template <bool INJECT_EAGAIN=false>
 class SeastoreNodeExtentManager final: public TransactionManagerHandle {
  public:
   SeastoreNodeExtentManager(
-      TransactionManager& tm, laddr_t min, double p_eagain)
+      InterruptedTransactionManager tm, laddr_t min, double p_eagain)
       : TransactionManagerHandle(tm), addr_min{min}, p_eagain{p_eagain} {
     if constexpr (INJECT_EAGAIN) {
       assert(p_eagain > 0.0 && p_eagain < 1.0);
@@ -97,27 +97,26 @@ class SeastoreNodeExtentManager final: public TransactionManagerHandle {
   bool is_read_isolated() const override { return true; }
 
   read_ertr::future<NodeExtentRef> read_extent(
-      Transaction& t, laddr_t addr, extent_len_t len) override {
-    TRACET("reading {}B at {:#x} ...", t, len, addr);
+      Transaction& t, laddr_t addr) override {
+    TRACET("reading at {:#x} ...", t, addr);
     if constexpr (INJECT_EAGAIN) {
       if (trigger_eagain()) {
-        DEBUGT("reading {}B at {:#x}: trigger eagain", t, len, addr);
+        DEBUGT("reading at {:#x}: trigger eagain", t, addr);
         return crimson::ct_error::eagain::make();
       }
     }
-    return tm.read_extent<SeastoreNodeExtent>(t, addr, len
-    ).safe_then([addr, len, &t](auto&& e) {
+    return tm.read_extent<SeastoreNodeExtent>(t, addr
+    ).safe_then([addr, &t](auto&& e) -> read_ertr::future<NodeExtentRef> {
       TRACET("read {}B at {:#x} -- {}",
              t, e->get_length(), e->get_laddr(), *e);
-      if (!e->is_valid()) {
-        ERRORT("read invalid extent: {}", t, *e);
-        ceph_abort("fatal error");
+      if (!e->is_valid() || t.is_conflicted()) {
+        ERRORT("transaction conflict detected on extent read {}", t, *e);
+	assert(t.is_conflicted());
+	return crimson::ct_error::eagain::make();
       }
       assert(e->get_laddr() == addr);
-      assert(e->get_length() == len);
       std::ignore = addr;
-      std::ignore = len;
-      return NodeExtentRef(e);
+      return read_ertr::make_ready_future<NodeExtentRef>(e);
     });
   }
 

@@ -3,6 +3,8 @@ from contextlib import contextmanager
 
 import pytest
 
+import yaml
+
 from ceph.deployment.drive_group import DriveGroupSpec, DeviceSelection
 from cephadm.serve import CephadmServe
 from cephadm.services.osd import OSD, OSDRemovalQueue, OsdIdClaims
@@ -158,6 +160,66 @@ class TestCephadm(object):
                     assert out == expected
 
     @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('[]'))
+    def test_service_ls_service_type_flag(self, cephadm_module):
+        with with_host(cephadm_module, 'host1'):
+            with with_host(cephadm_module, 'host2'):
+                with with_service(cephadm_module, ServiceSpec('mgr', placement=PlacementSpec(count=2)), CephadmOrchestrator.apply_mgr, ''):
+                    with with_service(cephadm_module, ServiceSpec('mds', 'test-id', placement=PlacementSpec(count=2)), CephadmOrchestrator.apply_mds, ''):
+
+                        # with no service-type. Should provide info fot both services
+                        c = cephadm_module.describe_service()
+                        out = [dict(o.to_json()) for o in wait(cephadm_module, c)]
+                        expected = [
+                            {
+                                'placement': {'count': 2},
+                                'service_name': 'mgr',
+                                'service_type': 'mgr',
+                                'status': {'created': mock.ANY,
+                                           'running': 2,
+                                           'size': 2}
+                            },
+                            {
+                                'placement': {'count': 2},
+                                'service_id': 'test-id',
+                                'service_name': 'mds.test-id',
+                                'service_type': 'mds',
+                                'status': {'created': mock.ANY,
+                                           'running': 2,
+                                           'size': 2}
+                            },
+                        ]
+
+                        for o in out:
+                            if 'events' in o:
+                                del o['events']  # delete it, as it contains a timestamp
+                        assert out == expected
+
+                        # with service-type. Should provide info fot only mds
+                        c = cephadm_module.describe_service(service_type='mds')
+                        out = [dict(o.to_json()) for o in wait(cephadm_module, c)]
+                        expected = [
+                            {
+                                'placement': {'count': 2},
+                                'service_id': 'test-id',
+                                'service_name': 'mds.test-id',
+                                'service_type': 'mds',
+                                'status': {'created': mock.ANY,
+                                           'running': 2,
+                                           'size': 2}
+                            },
+                        ]
+
+                        for o in out:
+                            if 'events' in o:
+                                del o['events']  # delete it, as it contains a timestamp
+                        assert out == expected
+
+                        # service-type should not match with service names
+                        c = cephadm_module.describe_service(service_type='mds.test-id')
+                        out = [dict(o.to_json()) for o in wait(cephadm_module, c)]
+                        assert out == []
+
+    @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('[]'))
     def test_device_ls(self, cephadm_module):
         with with_host(cephadm_module, 'test'):
             c = cephadm_module.get_inventory()
@@ -297,6 +359,38 @@ class TestCephadm(object):
                     stdin='{"config": "\\n\\n[mon]\\nk=v\\n[mon.test]\\npublic network = 127.0.0.0/8\\n", '
                     + '"keyring": "", "files": {"config": "[mon.test]\\npublic network = 127.0.0.0/8\\n"}}',
                     image='')
+
+    @mock.patch("cephadm.serve.CephadmServe._run_cephadm")
+    def test_monitoring_ports(self, _run_cephadm, cephadm_module: CephadmOrchestrator):
+        _run_cephadm.return_value = ('{}', '', 0)
+
+        with with_host(cephadm_module, 'test'):
+
+            yaml_str = """service_type: alertmanager
+service_name: alertmanager
+placement:
+    count: 1
+spec:
+    port: 4200
+"""
+            yaml_file = yaml.safe_load(yaml_str)
+            spec = ServiceSpec.from_json(yaml_file)
+
+            with mock.patch("cephadm.services.monitoring.AlertmanagerService.generate_config", return_value=({}, [])):
+                with with_service(cephadm_module, spec):
+
+                    CephadmServe(cephadm_module)._check_daemons()
+
+                    _run_cephadm.assert_called_with(
+                        'test', 'alertmanager.test', 'deploy', [
+                            '--name', 'alertmanager.test',
+                            '--meta-json', '{"service_name": "alertmanager", "ports": [4200, 9094], "ip": null, "deployed_by": [], "rank": null, "rank_generation": null}',
+                            '--config-json', '-',
+                            '--tcp-ports', '4200 9094',
+                            '--reconfig'
+                        ],
+                        stdin='{}',
+                        image='')
 
     @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('{}'))
     def test_daemon_check_post(self, cephadm_module: CephadmOrchestrator):
@@ -1221,7 +1315,7 @@ Traceback (most recent call last):
             ]
 
     @mock.patch("cephadm.serve.CephadmServe._run_cephadm")
-    def test_osd_activate(self, _run_cephadm, cephadm_module: CephadmOrchestrator):
+    def test_osd_activate_datadevice(self, _run_cephadm, cephadm_module: CephadmOrchestrator):
         _run_cephadm.return_value = ('{}', '', 0)
         with with_host(cephadm_module, 'test', refresh_hosts=False):
             cephadm_module.mock_store_set('_ceph_get', 'osd_map', {
@@ -1239,9 +1333,61 @@ Traceback (most recent call last):
                     'tags': {
                         'ceph.cluster_fsid': cephadm_module._cluster_fsid,
                         'ceph.osd_fsid': 'uuid'
-                    }
+                    },
+                    'type': 'data'
                 }]
             }
             _run_cephadm.return_value = (json.dumps(ceph_volume_lvm_list), '', 0)
+            _run_cephadm.reset_mock()
             assert cephadm_module._osd_activate(
                 ['test']).stdout == "Created osd(s) 1 on host 'test'"
+            assert _run_cephadm.mock_calls == [
+                mock.call('test', 'osd', 'ceph-volume',
+                          ['--', 'lvm', 'list', '--format', 'json'], no_fsid=False, image=''),
+                mock.call('test', 'osd.1', 'deploy',
+                          ['--name', 'osd.1', '--meta-json', mock.ANY,
+                              '--config-json', '-', '--osd-fsid', 'uuid'],
+                          stdin=mock.ANY, image=''),
+            ]
+
+    @mock.patch("cephadm.serve.CephadmServe._run_cephadm")
+    def test_osd_activate_datadevice_dbdevice(self, _run_cephadm, cephadm_module: CephadmOrchestrator):
+        _run_cephadm.return_value = ('{}', '', 0)
+        with with_host(cephadm_module, 'test', refresh_hosts=False):
+            cephadm_module.mock_store_set('_ceph_get', 'osd_map', {
+                'osds': [
+                    {
+                        'osd': 1,
+                        'up_from': 0,
+                        'uuid': 'uuid'
+                    }
+                ]
+            })
+
+            ceph_volume_lvm_list = {
+                '1': [{
+                    'tags': {
+                        'ceph.cluster_fsid': cephadm_module._cluster_fsid,
+                        'ceph.osd_fsid': 'uuid'
+                    },
+                    'type': 'data'
+                }, {
+                    'tags': {
+                        'ceph.cluster_fsid': cephadm_module._cluster_fsid,
+                        'ceph.osd_fsid': 'uuid'
+                    },
+                    'type': 'db'
+                }]
+            }
+            _run_cephadm.return_value = (json.dumps(ceph_volume_lvm_list), '', 0)
+            _run_cephadm.reset_mock()
+            assert cephadm_module._osd_activate(
+                ['test']).stdout == "Created osd(s) 1 on host 'test'"
+            assert _run_cephadm.mock_calls == [
+                mock.call('test', 'osd', 'ceph-volume',
+                          ['--', 'lvm', 'list', '--format', 'json'], no_fsid=False, image=''),
+                mock.call('test', 'osd.1', 'deploy',
+                          ['--name', 'osd.1', '--meta-json', mock.ANY,
+                              '--config-json', '-', '--osd-fsid', 'uuid'],
+                          stdin=mock.ANY, image=''),
+            ]

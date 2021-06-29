@@ -4,7 +4,6 @@
 #include "crimson/os/seastore/logging.h"
 
 #include "crimson/os/seastore/onode_manager/staged-fltree/fltree_onode_manager.h"
-#include "crimson/os/seastore/onode_manager/staged-fltree/stages/key_layout.h"
 
 namespace crimson::os::seastore::onode {
 
@@ -41,10 +40,6 @@ FLTreeOnodeManager::get_or_create_onode(
   const ghobject_t &hoid)
 {
   LOG_PREFIX(FLTreeOnodeManager::get_or_create_onode);
-  if (hoid.hobj.oid.name.length() + hoid.hobj.nspace.length()
-      > key_view_t::MAX_NS_OID_LENGTH) {
-    return crimson::ct_error::value_too_large::make();
-  }
   return tree.insert(
     trans, hoid,
     OnodeTree::tree_value_config_t{sizeof(onode_layout_t)}
@@ -132,17 +127,19 @@ FLTreeOnodeManager::list_onodes_ret FLTreeOnodeManager::list_onodes(
         std::move(cursor),
         list_onodes_bare_ret(),
         [this, &trans, end] (auto& to_list, auto& current_cursor, auto& ret) {
-      return crimson::do_until(
+      return crimson::repeat(
           [this, &trans, end, &to_list, &current_cursor, &ret] () mutable
-          -> eagain_future<bool> {
+          -> eagain_future<seastar::stop_iteration> {
         if (current_cursor.is_end() ||
             current_cursor.get_ghobj() >= end) {
           std::get<1>(ret) = end;
-          return seastar::make_ready_future<bool>(true);
+          return seastar::make_ready_future<seastar::stop_iteration>(
+            seastar::stop_iteration::yes);
         }
         if (to_list == 0) {
           std::get<1>(ret) = current_cursor.get_ghobj();
-          return seastar::make_ready_future<bool>(true);
+          return seastar::make_ready_future<seastar::stop_iteration>(
+            seastar::stop_iteration::yes);
         }
         std::get<0>(ret).emplace_back(current_cursor.get_ghobj());
         return tree.get_next(trans, current_cursor
@@ -151,7 +148,7 @@ FLTreeOnodeManager::list_onodes_ret FLTreeOnodeManager::list_onodes(
           // accelerate tree lookup.
           --to_list;
           current_cursor = next_cursor;
-          return seastar::make_ready_future<bool>(false);
+          return seastar::stop_iteration::no;
         });
       }).safe_then([&ret] () mutable {
         return seastar::make_ready_future<list_onodes_bare_ret>(

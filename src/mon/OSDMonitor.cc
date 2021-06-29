@@ -6652,9 +6652,14 @@ bool OSDMonitor::preprocess_command(MonOpRequestRef op)
     rs << "\n";
     rdata.append(rs.str());
   } else if (prefix == "osd crush tree") {
-    string shadow;
-    cmd_getval(cmdmap, "shadow", shadow);
-    bool show_shadow = shadow == "--show-shadow";
+    bool show_shadow = false;
+    if (!cmd_getval_compat_cephbool(cmdmap, "show_shadow", show_shadow)) {
+      std::string shadow;
+      if (cmd_getval(cmdmap, "shadow", shadow) &&
+	  shadow == "--show-shadow") {
+	show_shadow = true;
+      }
+    }
     boost::scoped_ptr<Formatter> f(Formatter::create(format));
     if (f) {
       f->open_object_section("crush_tree");
@@ -7675,6 +7680,43 @@ int OSDMonitor::prepare_pool_stripe_width(const unsigned pool_type,
   return err;
 }
 
+int OSDMonitor::get_replicated_stretch_crush_rule()
+{
+  /* we don't write down the stretch rule anywhere, so
+   * we have to guess it. How? Look at all the pools
+   * and count up how many times a given rule is used
+   * on stretch pools and then return the one with
+   * the most users!
+   */
+  map<int,int> rule_counts;
+  for (const auto& pooli : osdmap.pools) {
+    const pg_pool_t& p = pooli.second;
+    if (p.is_replicated() && p.is_stretch_pool()) {
+      if (!rule_counts.count(p.crush_rule)) {
+	rule_counts[p.crush_rule] = 1;
+      } else {
+	++rule_counts[p.crush_rule];
+      }
+    }
+  }
+
+  if (rule_counts.empty()) {
+    return -ENOENT;
+  }
+
+  int most_used_count = 0;
+  int most_used_rule = -1;
+  for (auto i : rule_counts) {
+    if (i.second > most_used_count) {
+      most_used_rule = i.first;
+      most_used_count = i.second;
+    }
+  }
+  ceph_assert(most_used_count > 0);
+  ceph_assert(most_used_rule >= 0);
+  return most_used_rule;
+}
+
 int OSDMonitor::prepare_pool_crush_rule(const unsigned pool_type,
 					const string &erasure_code_profile,
 					const string &rule_name,
@@ -7687,8 +7729,12 @@ int OSDMonitor::prepare_pool_crush_rule(const unsigned pool_type,
     case pg_pool_t::TYPE_REPLICATED:
       {
 	if (rule_name == "") {
-	  // Use default rule
-	  *crush_rule = osdmap.crush->get_osd_pool_default_crush_replicated_ruleset(cct);
+	  if (osdmap.stretch_mode_enabled) {
+	    *crush_rule = get_replicated_stretch_crush_rule();
+	  } else {
+	    // Use default rule
+	    *crush_rule = osdmap.crush->get_osd_pool_default_crush_replicated_ruleset(cct);
+	  }
 	  if (*crush_rule < 0) {
 	    // Errors may happen e.g. if no valid rule is available
 	    *ss << "No suitable CRUSH rule exists, check "
@@ -12951,11 +12997,11 @@ bool OSDMonitor::prepare_command_impl(MonOpRequestRef op,
     }
 
     // make sure new tier is empty
-    string force_nonempty;
-    cmd_getval(cmdmap, "force_nonempty", force_nonempty);
+    bool force_nonempty = false;
+    cmd_getval_compat_cephbool(cmdmap, "force_nonempty", force_nonempty);
     const pool_stat_t *pstats = mon.mgrstatmon()->get_pool_stat(tierpool_id);
     if (pstats && pstats->stats.sum.num_objects != 0 &&
-	force_nonempty != "--force-nonempty") {
+	!force_nonempty) {
       ss << "tier pool '" << tierpoolstr << "' is not empty; --force-nonempty to force";
       err = -ENOTEMPTY;
       goto reply;
@@ -12967,8 +13013,8 @@ bool OSDMonitor::prepare_command_impl(MonOpRequestRef op,
       goto reply;
     }
     if ((!tp->removed_snaps.empty() || !tp->snaps.empty()) &&
-	((force_nonempty != "--force-nonempty") ||
-	 (!g_conf()->mon_debug_unsafe_allow_tier_with_nonempty_snaps))) {
+	(!force_nonempty ||
+	 !g_conf()->mon_debug_unsafe_allow_tier_with_nonempty_snaps)) {
       ss << "tier pool '" << tierpoolstr << "' has snapshot state; it cannot be added as a tier without breaking the pool";
       err = -ENOTEMPTY;
       goto reply;
