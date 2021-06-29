@@ -50,11 +50,11 @@ class CephTrackerClient(RestClient):
         return response
 
     @RestClient.api_post('/', resp_structure='*')
-    def create_issue(self, subject, description, request=None):
-        response = request({'project_id': 1,
-                            'tracker_id': 1,
+    def create_issue(self, project_id, tracker_id, subject, description,category_id, severity, request=None):
+        response = request({'project_id': project_id,
+                            'tracker_id': tracker_id,
                             'subject': subject,
                             'description': description,
-                            'category_id': '195',
-                            'Severity': '3 - minor'})
+                            'category_id': category_id,
+                            'Severity': severity})
         return response
