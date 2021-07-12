@@ -42,9 +42,9 @@ class Feedback(RESTController):
         return self.cephTrackerClient.get_issues(issue_number)
 
 
-@PM.add_hook
-class CLI_Feedback():
-    @CLICommand('dashboard issue')
-    def cli_report_issue(self, project_id: int, tracker_id: int, subject: str, description: str, category_id: int, severity: str):
-        feedback = Feedback.create(project_id, tracker_id, subject, description, category_id, severity)
-        return (0, '', '')
+# @PM.add_hook
+# class CLI_Feedback():
+#     @CLICommand('dashboard issue')
+#     def cli_report_issue(self, project_id: int, tracker_id: int, subject: str, description: str, category_id: int, severity: str):
+#         feedback = Feedback.create(project_id, tracker_id, subject, description, category_id, severity)
+#         return (0, '', '')
