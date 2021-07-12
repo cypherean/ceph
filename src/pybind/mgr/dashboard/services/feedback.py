@@ -1,18 +1,29 @@
 # -*- coding: utf-8 -*-
 
-import json
 import logging
-import os
 from typing import Optional
 from redminelib import Redmine
+from enum import Enum
+import errno
 
 from requests.auth import AuthBase
-
 from mgr_module import CLICommand
+from mgr_module import CLIWriteCommand
 
 from ..settings import Settings
-from ..exceptions import DashboardException
+from ..exceptions import DashboardException, ScopeNotInRole
 from ..rest_client import RestClient
+from ..plugins import PLUGIN_MANAGER as PM
+
+
+class Feedback(Enum):
+    project_id = 1,
+    tracker_id = 1,
+    subject = '',
+    description = '',
+    category_id = 195,
+    Severity = '3 - Minor'
+
 
 
 @CLICommand('issue create')
@@ -60,50 +71,24 @@ class CephTrackerClient(RestClient):
         response = request()
         return response
 
+    @CLICommand('dashboard feedback', perm='w')
     @RestClient.api_post('/issues', resp_structure='*')
-    def create_issue(self, project_id, tracker_id, subject, description, category_id, severity, request=None):
+    def create_issue(self, project_id: int, tracker_id: int, subject: str, description: str, category_id: int, severity: Optional[str] = '3 - Minor', inbuf: Optional[str] = None, request=None):
+        '''
+        Create an issue in the Ceph Issue tracker
+        '''
+
+        obj = self.find_object(project_id)
+        if obj is None:
+            return -errno.EEXIST, '', 'Project ID not found'
         redmine = Redmine("https://tracker.ceph.com", key=self.get_api_key())
-        project = redmine.project.get("Ceph")
-        # ceph_project_id = project.id
-        issue = redmine.issue.create(
-            project_id=project_id,
-            tracker_id=tracker_id,
-            subject=subject,
-            description=description,
-            category_id=category_id,
-            Severity=severity
-        )
-        return issue
-        # response = request({
-        #     "issue":
-        #     {'project': project_id,
-        #      'tracker': tracker_id,
-        #      'subject': subject,
-        #      'description': description,
-        #      'category': category_id,
-        #      'severity': severity}})
-        # return response
-
-
-class IssueModel:
-    project_id: str
-    tracker_id: str
-    subject: str
-    description: str
-    category_id: str
-    severity: str
-
-    def __init__(self, project_id, tracker_id, subject, description, category_id, severity):
-        self.project_id = project_id
-        self.tracker_id = tracker_id
-        self.subject = subject
-        self.description = description
-        self.category_id = category_id
-        self.severity = severity
-
-    def as_dict(self):
-        return {'project_id': self.project_id,
-                'subject': self.subject,
-                'description': self.description,
-                'category_id': self.category_id,
-                'severity': self.severity}
+        # project = redmine.project.get("Ceph")
+        # issue = redmine.issue.create(
+        #     project_id=project_id,
+        #     tracker_id=tracker_id,
+        #     subject=subject,
+        #     description=description,
+        #     category_id=category_id,
+        #     Severity=severity
+        # )
+        return 1, '', ''
