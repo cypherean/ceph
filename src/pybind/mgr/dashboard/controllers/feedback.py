@@ -5,10 +5,10 @@ from ..model.feedback import Feedback
 from ..rest_client import RequestException
 from ..security import Scope
 from ..services import feedback
-from . import ApiController, ControllerDoc, RESTController
+from . import UiApiController, ControllerDoc, RESTController
 
 
-@ApiController('/feedback', Scope.CONFIG_OPT)
+@UiApiController('/feedback', Scope.CONFIG_OPT)
 @ControllerDoc("Feedback API", "Report")
 class FeedbackController(RESTController):
     issueAPIkey = None

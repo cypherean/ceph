@@ -18,5 +18,9 @@
             *ngIf="configOptPermission.read"
             routerLink="/telemetry"
             i18n>Telemetry configuration</button>
+    <button ngbDropdownItem 
+            *ngIf="configOptPermission.read" 
+            (click)="openFeedbackModal()"
+            i18n>Raise an Issue</button>
   </div>
 </div>
