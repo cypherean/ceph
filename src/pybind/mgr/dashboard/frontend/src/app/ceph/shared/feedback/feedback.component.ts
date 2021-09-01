@@ -1,7 +1,7 @@
 import { Component } from '@angular/core';
 import { FormControl, Validators } from '@angular/forms';
 
-import { NgbActiveModal } from '@ng-bootstrap/ng-bootstrap';
+import { NgbActiveModal, NgbModal } from '@ng-bootstrap/ng-bootstrap';
 
 import { CdFormGroup } from '~/app/shared/forms/cd-form-group';
 import { ActionLabelsI18n } from '~/app/shared/constants/app.constants';
@@ -22,7 +22,8 @@ export class FeedbackComponent {
   feedbackForm: CdFormGroup;
   constructor(
     public activeModal: NgbActiveModal,
-    public actionLabels: ActionLabelsI18n
+    public actionLabels: ActionLabelsI18n,
+    public secondaryModal: NgbModal
   ) {
     this.createForm();
   }
@@ -52,24 +53,23 @@ export class FeedbackComponent {
       body: JSON.stringify({ "project_id": this.feedbackForm.controls['project'].value, "tracker_id": this.feedbackForm.controls['tracker'].value, "subject": this.feedbackForm.controls['subject'].value, "description": this.feedbackForm.controls['description'].value })
     }).then((res) => {
       if (res.status != 201) {
-        alert("Error:" + res.json())
+        alert("Error: Set API key")
+
       }
       return res.json()
     })
       .then((jsonData) => {
-        if(jsonData['message'].length == 0) {
-          alert("Key not set");
-        }
-        else {
-          if (window.confirm('Issue successfully created: '+ jsonData['message'] + '. Click OK to open it in Ceph Issue Tracker and cancel to stay on this site.')) 
-          {
-            window.location.href='https://tracker.ceph.com/issues/'+jsonData['message'];
+        if (!(_.isEmpty(jsonData))) {
+          if (window.confirm('Issue successfully created: ' + jsonData['message'] + '. Click OK to open it in Ceph Issue Tracker and cancel to stay on this site.')) {
+            window.location.href = 'https://tracker.ceph.com/issues/' + jsonData['message'];
           };
           this.activeModal.close();
         }
+        else {
+          // error handling
+        }
       })
       .catch((err) => {
-        // handle error
         alert(err);
         this.activeModal.close();
       });

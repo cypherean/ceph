@@ -5,7 +5,7 @@ import { Icons } from '~/app/shared/enum/icons.enum';
 import { Permission } from '~/app/shared/models/permissions';
 import { AuthStorageService } from '~/app/shared/services/auth-storage.service';
 import { ModalService } from '~/app/shared/services/modal.service';
-import { FeedbackComponent } from '~/app/ceph/dashboard/feedback/feedback.component';
+import { FeedbackComponent } from '~/app/ceph/shared/feedback/feedback.component';
 @Component({
   selector: 'cd-administration',
   templateUrl: './administration.component.html',
